@@ -1,0 +1,62 @@
+name: Mirror PR to Private Repo
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      # workflows: write # (not required here)
+
+    steps:
+      - name: Checkout PR head (fetch PR branch)
+        uses: actions/checkout@v4
+        with:
+          # Checkout the PR head ref directly to get exact branch contents,
+          # works for branches from same-repo and forks.
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          fetch-depth: 0
+
+      - name: Create GitHub App installation token
+        id: app_token
+        # prefer the official action to mint an app token
+        uses: actions/create-github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          # optional: installation_id: ... (not required generally)
+
+      - name: Configure git committer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Push PR branch into private repo
+        env:
+          APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          # Name desired branch in private repo
+          PR_NUM=${{ github.event.pull_request.number }}
+          TARGET_BRANCH="external-pr-${PR_NUM}"
+
+          # Add remote for private repo using token
+          git remote add private https://x-access-token:${APP_TOKEN}@github.com/fluent-cart/private-test.git
+
+          # Force push the checked-out HEAD to the private repo target branch
+          git push -f private HEAD:${TARGET_BRANCH}
+
+      # Optional: Open a PR in private repo from pr-<n> -> main (or whatever base)
+      - name: Create PR in private repo (optional)
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          repository: fluent-cart/private-test
+          title: "Mirror of public PR #${{ github.event.pull_request.number }}"
+          body: |
+            This branch was automatically mirrored from the public repo PR #${{ github.event.pull_request.number }}.
+          base: main
+          head: external-pr-${{ github.event.pull_request.number }}
